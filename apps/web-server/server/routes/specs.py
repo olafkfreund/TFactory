@@ -21,7 +21,7 @@ from typing import Any
 
 from factory_common.logsafe import sanitize_log
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -175,6 +175,18 @@ class SpecIngestRequest(BaseModel):
             "completion event."
         ),
     )
+    correlation_key: str | None = Field(
+        default=None,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,127}$",
+    )
+
+    @field_validator("correlation_key")
+    @classmethod
+    def _reject_all_digits(cls, value: str | None) -> str | None:
+        if value is not None and value.isdigit():
+            raise ValueError("correlation_key must not be all digits")
+        return value
 
 
 _GITHUB_SLUG_RE = re.compile(
@@ -564,6 +576,7 @@ async def ingest_spec(  # noqa: PLR0912,PLR0915 - handoff stages share authoriza
                 originator=req.originator,
                 agent_identity=req.agent_identity,
                 pr_number=req.pr_number,
+                correlation_key=req.correlation_key,
                 git_env=git_env,
             )
     except FileExistsError as exc:

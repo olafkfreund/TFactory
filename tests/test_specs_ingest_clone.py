@@ -217,3 +217,76 @@ def test_provenance_fields_reject_unbounded_or_odd_values(field, bad):
     }
     with pytest.raises(ValidationError):
         SpecIngestRequest(**base, **{field: bad})
+
+
+def _specs_client(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    repo = tmp_path / "repo"
+    repo.mkdir(exist_ok=True)
+    (repo / "README.md").write_text("x")
+    monkeypatch.setenv("TFACTORY_WORKSPACE_ROOT", str(tmp_path / "ws"))
+    monkeypatch.setenv("TFACTORY_AUTO_PLAN", "0")
+    monkeypatch.setattr(
+        "server.routes.projects.load_projects",
+        lambda: {"proj": {"name": "proj", "path": str(repo)}},
+    )
+    monkeypatch.setattr(specs_mod, "require_project_role", AsyncMock())
+    app = FastAPI()
+    app.include_router(specs_mod.router)
+    app.dependency_overrides[specs_mod.get_db] = lambda: None
+    return TestClient(app)
+
+
+@pytest.mark.parametrize(
+    ("spec_id", "correlation_key"),
+    [("s-issue", "o/r#42"), ("s-pf", "pf-337-x")],
+)
+def test_ingest_route_writes_correlation_key_to_source_json(
+    monkeypatch, tmp_path, spec_id, correlation_key
+):
+    import json
+
+    client = _specs_client(monkeypatch, tmp_path)
+    response = client.post(
+        "/api/specs/ingest",
+        json={
+            "project_id": "proj",
+            "spec_id": spec_id,
+            "spec_text": "## Acceptance Criteria\n- it works",
+            "correlation_key": correlation_key,
+        },
+    )
+    assert response.status_code == 200, response.text
+    source_path = (
+        tmp_path
+        / "ws"
+        / "workspaces"
+        / "proj"
+        / "specs"
+        / spec_id
+        / "context"
+        / "source.json"
+    )
+    source = json.loads(source_path.read_text())
+    assert source["correlation_key"] == correlation_key
+
+
+@pytest.mark.parametrize("bad_key", ["x" * 129, "pf 337", "12345"])
+def test_ingest_route_rejects_invalid_correlation_key_with_422(
+    monkeypatch, tmp_path, bad_key
+):
+    client = _specs_client(monkeypatch, tmp_path)
+    response = client.post(
+        "/api/specs/ingest",
+        json={
+            "project_id": "proj",
+            "spec_id": "s1",
+            "spec_text": "## Acceptance Criteria\n- it works",
+            "correlation_key": bad_key,
+        },
+    )
+    assert response.status_code == 422
